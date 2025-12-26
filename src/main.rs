@@ -14,6 +14,14 @@ struct WebhookPayload {
     registry: Option<String>,
 }
 
+#[derive(Deserialize, Debug)]
+struct ErrorPayload {
+    project: String,
+    repository: String,
+    message: String,
+    githubtoken: String,
+}
+
 type ConfigFile = HashMap<String, String>;
 
 struct AppState {
@@ -46,6 +54,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/webhook", post(handle_deploy))
+        .route("/builderror", post(handle_error))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -211,6 +220,74 @@ async fn deploy_docker(path: &str, payload: &WebhookPayload) -> &'static str {
         Err(e) => {
             error!("Failed to execute Docker Compose command in {}: {}", path, e);
             "Command execution error"
+        }
+    }
+}
+
+async fn handle_error(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ErrorPayload>,
+) -> &'static str {
+    info!("📥 Processing build error for project: {}", payload.project);
+
+    // 1. Lookup Project Path
+    let project_path = match state.config.get(&payload.project) {
+        Some(path) => path,
+        None => {
+            warn!("Project '{}' not found in config", payload.project);
+            return "Project not found";
+        }
+    };
+
+    // 2. Verify Local Remote matches Payload Repository
+    let remote_output = Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .output()
+        .await;
+
+    let remote_url = match remote_output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            error!("Failed to get local git remote for {}", project_path);
+            return "Local verification failed";
+        }
+    };
+
+    if !remote_url.contains(&payload.repository) {
+        warn!(
+            "Repository mismatch: Local({}) vs Payload({})",
+            remote_url, payload.repository
+        );
+        return "Repository mismatch";
+    }
+
+    // 3. Inner Auth Check on GitHub
+    let auth_url = format!(
+        "https://{}@github.com/{}",
+        payload.githubtoken, payload.repository
+    );
+    let check_status = Command::new("git")
+        .arg("ls-remote")
+        .arg(&auth_url)
+        .status()
+        .await;
+
+    match check_status {
+        Ok(status) if status.success() => {
+            info!("✅ Auth Success. Logging error...");
+            error!(
+                "🚨 [BUILD ERROR][{}] Repo: {} -> {}",
+                payload.project, payload.repository, payload.message
+            );
+            "Error Logged Successfully"
+        }
+        _ => {
+            warn!("❌ GitHub Auth failed for {}", payload.repository);
+            "Authentication Failed"
         }
     }
 }
