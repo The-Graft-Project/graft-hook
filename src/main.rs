@@ -1,13 +1,8 @@
 use axum::{extract::State, routing::post, Json, Router};
-use bollard::auth::DockerCredentials;
-use bollard::image::CreateImageOptions;
-use bollard::Docker;
-use futures_util::stream::StreamExt;
-use git2::Repository;
 use serde::Deserialize;
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::process::Command;
-use tracing::{info, error, warn, debug, instrument}; // New imports for logging
+use tracing::{info, error, warn, debug, instrument};
 
 #[derive(Deserialize, Debug)]
 struct WebhookPayload {
@@ -23,7 +18,6 @@ type ConfigFile = HashMap<String, String>;
 
 struct AppState {
     config: ConfigFile,
-    docker: Docker,
 }
 
 #[tokio::main]
@@ -48,8 +42,7 @@ async fn main() {
     
     info!("Loaded {} project(s) from config", config.len());
 
-    let docker = Docker::connect_with_unix_defaults().expect("CRITICAL: Docker connection failed");
-    let state = Arc::new(AppState { config, docker });
+    let state = Arc::new(AppState { config });
 
     let app = Router::new()
         .route("/webhook", post(handle_deploy))
@@ -83,8 +76,8 @@ async fn handle_deploy(
     // 2. Select Deployment Mode
     match payload.r#type.as_str() {
         "repo" => {
-            info!("Mode selected: Git Pull (Native Git2)");
-            deploy_git(project_path).await
+            info!("Mode selected: Git Pull & Compose Build");
+            deploy_git(project_path, &payload).await
         }
         "image" => {
             info!("Mode selected: Docker Login & Compose Pull");
@@ -97,21 +90,65 @@ async fn handle_deploy(
     }
 }
 
-async fn deploy_git(path: &str) -> &'static str {
-    match Repository::open(path) {
-        Ok(repo) => {
-            debug!("Git repository opened successfully");
-            let mut remote = repo.find_remote("origin").unwrap();
-            if let Err(e) = remote.fetch(&["main"], None, None) {
-                error!("Git fetch failed: {}", e);
-                return "Git Fetch Failed";
-            }
-            info!("✅ Git Fetch Complete for {}", path);
-            "Git Fetch Complete"
+async fn deploy_git(path: &str, payload: &WebhookPayload) -> &'static str {
+    // 1. Resolve Credentials
+    let token = payload.githubtoken.clone()
+        .or_else(|| env::var("DOCKER_TOKEN").ok());
+    
+    let user = payload.user.clone()
+        .or_else(|| env::var("DOCKER_USER").ok());
+
+    let (t, u) = match (token, user) {
+        (Some(t), Some(u)) => (t, u),
+        _ => {
+            error!("❌ Missing Git credentials (token or user) in payload or environment");
+            return "Missing Git Credentials";
+        }
+    };
+
+    // 2. Perform Git Pull with token using credential helper
+    // We use a temporary credential helper to pass the token without changing the remote URL
+    info!("Starting Git pull in {}", path);
+    let pull_status = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "cd {} && git -c credential.helper= -c \"credential.helper=!f() {{ echo username={}; echo password={}; }}; f\" pull origin main",
+            path, u, t
+        ))
+        .status()
+        .await;
+
+    match pull_status {
+        Ok(status) if status.success() => {
+            info!("✅ Git pull successful");
+        }
+        _ => {
+            error!("❌ Git pull failed in {}", path);
+            return "Git Pull Failed";
+        }
+    }
+
+    // 3. Trigger Docker Compose Build and Up
+    info!("Running: docker compose up -d --build in {}", path);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("cd {} && docker compose up -d --build", path))
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            info!("✅ Container(s) rebuilt and restarted successfully via Docker Compose");
+            "Success: Repo Pulled and Containers Rebuilt"
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            error!("Docker Compose build/up failed in {}: {}", path, stderr);
+            "Git pull success, but Compose build/up failed"
         }
         Err(e) => {
-            error!("Failed to open repository at {}: {}", path, e);
-            "Repo path error"
+            error!("Failed to execute Docker Compose command in {}: {}", path, e);
+            "Command execution error"
         }
     }
 }
