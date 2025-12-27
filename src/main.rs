@@ -140,13 +140,16 @@ async fn deploy_git(path: &str, payload: &WebhookPayload) -> &'static str {
         }
     };
 
-    // 2. Perform Git Pull with token using credential helper
-    // We use a temporary credential helper to pass the token without changing the remote URL
-    info!("Starting Git pull in {}", path);
+    // 2. Perform Force Git Pull (Fetch + Reset Hard)
+    // This ensures that local changes or untracked file conflicts (like docker-compose.yml)
+    // are overwritten by the remote state.
+    info!("Starting Force Git Pull (fetch & reset --hard) in {}", path);
     let pull_status = Command::new("sh")
         .arg("-c")
         .arg(format!(
-            "cd {} && git -c credential.helper= -c \"credential.helper=!f() {{ echo username={}; echo password={}; }}; f\" pull origin main",
+            "cd {} && \
+             git -c credential.helper= -c \"credential.helper=!f() {{ echo username={}; echo password={}; }}; f\" fetch origin main && \
+             git reset --hard origin/main",
             path, u, t
         ))
         .status()
