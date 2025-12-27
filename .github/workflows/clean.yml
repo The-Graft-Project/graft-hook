@@ -4,10 +4,7 @@ on:
     workflows: ["Build Rust Webhook"]
     types:
       - completed
-  schedule:
-    - cron: '0 0 * * 0' # Runs every Sunday at midnight
-  workflow_dispatch: # Allows you to run it manually
-
+  
 jobs:
   delete-versions:
     runs-on: ubuntu-latest
