@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# 1.1 Configure Git for Dubious Ownership (Safe Directory)
+RUN git config --global --add safe.directory '*' 
+
 # 2. Install Static Docker CLI
 RUN curl -L https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | \
     tar -xz -C /usr/local/bin --strip-components=1 docker/docker

@@ -8,6 +8,8 @@ on:
 jobs:
   delete-versions:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - name: Delete old images
         uses: actions/delete-package-versions@v5
