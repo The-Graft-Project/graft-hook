@@ -8,7 +8,7 @@ use tracing::{info, error, warn, debug, instrument};
 struct WebhookPayload {
     project: String,
     repository: String,
-    githubtoken: Option<String>,
+    token: Option<String>,
     user: Option<String>,
     r#type: String,
     registry: Option<String>,
@@ -19,7 +19,7 @@ struct ErrorPayload {
     project: String,
     repository: String,
     message: String,
-    githubtoken: String,
+    token: String,
 }
 
 type ConfigFile = HashMap<String, String>;
@@ -100,12 +100,35 @@ async fn handle_deploy(
 }
 
 async fn deploy_git(path: &str, payload: &WebhookPayload) -> &'static str {
-    // 1. Resolve Credentials
-    let token = payload.githubtoken.clone()
-        .or_else(|| env::var("DOCKER_TOKEN").ok());
+    // 1. Resolve Credentials with Secure Environment Fallback
+    let token = payload.token.clone()
+        .or_else(|| {
+            // Only use environment token if ACCESS_SECRET exists and project path is valid
+            if let Ok(access_secret) = env::var("ACCESS_SECRET") {
+                if !access_secret.is_empty() {
+                    debug!("ACCESS_SECRET validated, checking for environment token");
+                    env::var("DOCKER_TOKEN").ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
     
     let user = payload.user.clone()
-        .or_else(|| env::var("DOCKER_USER").ok());
+        .or_else(|| {
+            // Only use environment user if ACCESS_SECRET exists
+            if let Ok(access_secret) = env::var("ACCESS_SECRET") {
+                if !access_secret.is_empty() {
+                    env::var("DOCKER_USER").ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
 
     let (t, u) = match (token, user) {
         (Some(t), Some(u)) => (t, u),
@@ -163,12 +186,35 @@ async fn deploy_git(path: &str, payload: &WebhookPayload) -> &'static str {
 }
 
 async fn deploy_docker(path: &str, payload: &WebhookPayload) -> &'static str {
-    // 1. Resolve Credentials
-    let token = payload.githubtoken.clone()
-        .or_else(|| env::var("DOCKER_TOKEN").ok());
+    // 1. Resolve Credentials with Secure Environment Fallback
+    let token = payload.token.clone()
+        .or_else(|| {
+            // Only use environment token if ACCESS_SECRET exists and project path is valid
+            if let Ok(access_secret) = env::var("ACCESS_SECRET") {
+                if !access_secret.is_empty() {
+                    debug!("ACCESS_SECRET validated, checking for environment token");
+                    env::var("DOCKER_TOKEN").ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
     
     let user = payload.user.clone()
-        .or_else(|| env::var("DOCKER_USER").ok());
+        .or_else(|| {
+            // Only use environment user if ACCESS_SECRET exists
+            if let Ok(access_secret) = env::var("ACCESS_SECRET") {
+                if !access_secret.is_empty() {
+                    env::var("DOCKER_USER").ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
 
     let registry = payload.registry.clone()
         .unwrap_or_else(|| "ghcr.io".to_string());
@@ -268,7 +314,7 @@ async fn handle_error(
     // 3. Inner Auth Check on GitHub
     let auth_url = format!(
         "https://{}@github.com/{}",
-        payload.githubtoken, payload.repository
+        payload.token, payload.repository
     );
     let check_status = Command::new("git")
         .arg("ls-remote")
