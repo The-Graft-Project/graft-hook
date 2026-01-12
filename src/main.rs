@@ -114,11 +114,7 @@ async fn handle_deploy(
     let project_path = project_entry.path();
     let rollback_limit = project_entry.rollback_backups();
 
-    // 2. Perform Backup if configured
-    if rollback_limit > 0 {
-        create_backup(&payload.project, project_path).await;
-        prune_backups(&payload.project, rollback_limit).await;
-    }
+    // 2. Deployment execution (moved backup logic to after success)
 
     // 3. Select Deployment Mode
     let result = match payload.r#type.as_str() {
@@ -136,8 +132,12 @@ async fn handle_deploy(
         }
     };
 
-    // 4. Post-deploy cleanup (delete old images safely)
-    if result.to_lowercase().contains("success") {
+    // 4. Post-deploy cleanup and backup
+    if result.starts_with("Success") {
+        if rollback_limit > 0 {
+            create_backup(&payload.project, project_path).await;
+            prune_backups(&payload.project, rollback_limit).await;
+        }
         debug!("Deployment success, performing safe image cleanup");
         let _ = Command::new("docker").args(["image", "prune", "-f"]).status().await;
     }
@@ -476,11 +476,11 @@ async fn prune_backups(project_name: &str, limit: u32) {
         
         dirs.sort(); // Sorts by timestamp (ascending)
 
-        if dirs.len() > limit as usize {
-            let to_delete = dirs.len() - limit as usize;
+        if dirs.len() > (limit + 1) as usize {
+            let to_delete = dirs.len() - (limit + 1) as usize;
             for i in 0..to_delete {
                 let dir_to_remove = format!("{}/{}", backup_root, dirs[i]);
-                info!("🗑️ Pruning old backup: {}", dir_to_remove);
+                info!("🗑️ Pruning old backup (keeping {} total): {}", limit + 1, dir_to_remove);
                 let _ = Command::new("rm").args(["-rf", &dir_to_remove]).status().await;
             }
         }
