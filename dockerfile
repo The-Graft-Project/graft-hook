@@ -19,9 +19,9 @@ RUN apt-get update && apt-get install -y \
 # 1.1 Configure Git
 RUN git config --global --add safe.directory '*' 
 
-# 2. Install Static Docker CLI (v29.0.0)
-# This perfectly matches your host's v29 engine
-RUN curl -L https://download.docker.com/linux/static/stable/x86_64/docker-29.0.0.tgz | \
+# 2. Install Static Docker CLI (v27.5.1 - Latest stable with API 1.47)
+# This will be forward-compatible with your host's v29 engine
+RUN curl -L https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | \
     tar -xz -C /usr/local/bin --strip-components=1 docker/docker
 
 # 3. Install Docker Compose Plugin (v2.32.4)
@@ -33,6 +33,5 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins/ && \
 WORKDIR /app
 COPY --from=builder /app/target/release/graft-hook .
 
-# No need to manually set DOCKER_API_VERSION anymore as they match
 EXPOSE 3000
 CMD ["./graft-hook"]
